@@ -15,6 +15,11 @@ import io
 from PIL import Image
 import plotly.io as pio
 import os
+import sys
+
+# 添加当前目录到Python路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from strategy.strategy_analyzer import StrategyAnalyzer
 import time
 import baostock as bs
