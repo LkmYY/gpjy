@@ -16,12 +16,13 @@ from PIL import Image
 import plotly.io as pio
 import os
 import sys
+import requests
+import time
 
 # 添加当前目录到Python路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from strategy.strategy_analyzer import StrategyAnalyzer
-import time
 import baostock as bs
 
 def get_realtime_data(symbol, market_type):
@@ -421,30 +422,56 @@ def get_stock_data(symbol, start, end, market_type):
     """
     try:
         if market_type == "A股":
-            # 添加市场后缀
+            # A股逻辑保持不变
             if symbol.startswith('6'):
                 symbol = f"{symbol}.SH"
             else:
                 symbol = f"{symbol}.SZ"
             return get_a_stock_data(symbol, start, end)
         elif market_type == "港股":
-            # 添加港股后缀
+            # 港股逻辑保持不变
             symbol = f"{symbol}.HK"
             return get_hk_stock_data(symbol, start, end)
         else:
-            stock = yf.Ticker(symbol)
-            df = stock.history(start=start, end=end)
+            # 美股数据获取添加重试机制
+            max_retries = 3
+            retry_delay = 2  # 秒
             
-            # 验证数据是否为空
-            if df.empty:
-                st.error(f"无法获取股票 {symbol} 的数据，请检查股票代码是否正确")
-                return None
-                
-            # 重置索引，将日期作为列
-            df = df.reset_index()
-            df = df.rename(columns={'Date': 'date'})
+            for attempt in range(max_retries):
+                try:
+                    stock = yf.Ticker(symbol)
+                    df = stock.history(start=start, end=end, interval="1d")
+                    
+                    if df.empty:
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            continue
+                        st.error(f"无法获取股票 {symbol} 的数据，请检查股票代码是否正确")
+                        return None
+                    
+                    # 重置索引，将日期作为列
+                    df = df.reset_index()
+                    df = df.rename(columns={'Date': 'date'})
+                    
+                    return df
+                    
+                except requests.exceptions.HTTPError as e:
+                    if "429" in str(e) and attempt < max_retries - 1:
+                        st.warning(f"请求频率限制，正在重试... ({attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay * (attempt + 1))  # 指数退避
+                        continue
+                    raise
+                    
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        st.warning(f"获取数据出错，正在重试... ({attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue
+                    raise
+                    
+            st.error(f"在 {max_retries} 次尝试后仍无法获取股票数据")
+            return None
             
-            return df
     except Exception as e:
         st.error(f"获取股票数据时出错: {str(e)}")
         return None
@@ -783,30 +810,56 @@ def get_stock_data(symbol, start, end, market_type):
     """
     try:
         if market_type == "A股":
-            # 添加市场后缀
+            # A股逻辑保持不变
             if symbol.startswith('6'):
                 symbol = f"{symbol}.SH"
             else:
                 symbol = f"{symbol}.SZ"
             return get_a_stock_data(symbol, start, end)
         elif market_type == "港股":
-            # 添加港股后缀
+            # 港股逻辑保持不变
             symbol = f"{symbol}.HK"
             return get_hk_stock_data(symbol, start, end)
         else:
-            stock = yf.Ticker(symbol)
-            df = stock.history(start=start, end=end)
+            # 美股数据获取添加重试机制
+            max_retries = 3
+            retry_delay = 2  # 秒
             
-            # 验证数据是否为空
-            if df.empty:
-                st.error(f"无法获取股票 {symbol} 的数据，请检查股票代码是否正确")
-                return None
-                
-            # 重置索引，将日期作为列
-            df = df.reset_index()
-            df = df.rename(columns={'Date': 'date'})
+            for attempt in range(max_retries):
+                try:
+                    stock = yf.Ticker(symbol)
+                    df = stock.history(start=start, end=end, interval="1d")
+                    
+                    if df.empty:
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                            continue
+                        st.error(f"无法获取股票 {symbol} 的数据，请检查股票代码是否正确")
+                        return None
+                    
+                    # 重置索引，将日期作为列
+                    df = df.reset_index()
+                    df = df.rename(columns={'Date': 'date'})
+                    
+                    return df
+                    
+                except requests.exceptions.HTTPError as e:
+                    if "429" in str(e) and attempt < max_retries - 1:
+                        st.warning(f"请求频率限制，正在重试... ({attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay * (attempt + 1))  # 指数退避
+                        continue
+                    raise
+                    
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        st.warning(f"获取数据出错，正在重试... ({attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue
+                    raise
+                    
+            st.error(f"在 {max_retries} 次尝试后仍无法获取股票数据")
+            return None
             
-            return df
     except Exception as e:
         st.error(f"获取股票数据时出错: {str(e)}")
         return None
@@ -847,9 +900,19 @@ with realtime_container:
     if 'auto_refresh_time' not in st.session_state:
         st.session_state.auto_refresh_time = time.time()
         
+    if 'auto_refresh_enabled' not in st.session_state:
+        st.session_state.auto_refresh_enabled = False
+    
+    # 添加自动刷新选项
+    auto_refresh = st.checkbox("启用自动刷新（每5秒）", value=st.session_state.auto_refresh_enabled, key="auto_refresh_checkbox")
+    
+    # 更新自动刷新状态
+    if auto_refresh != st.session_state.auto_refresh_enabled:
+        st.session_state.auto_refresh_enabled = auto_refresh
+        
     # 每5秒自动刷新
     current_time = time.time()
-    if current_time - st.session_state.auto_refresh_time >= 5:
+    if st.session_state.auto_refresh_enabled and current_time - st.session_state.auto_refresh_time >= 5:
         st.session_state.auto_refresh_time = current_time
         refresh_realtime = True
     
@@ -908,11 +971,11 @@ with realtime_container:
         st.markdown(f"**分析依据:** {trend_analysis['reason']}")
         st.markdown(f"**后市预测:** {trend_analysis['prediction']}")
         
-        # 添加自动刷新选项
-        auto_refresh = st.checkbox("启用自动刷新（每5秒）", value=False)
-        if auto_refresh:
-            time.sleep(5)  # 等待5秒
-            st.experimental_rerun()  # 重新运行应用
+        # 删除原来的自动刷新选项
+        # auto_refresh = st.checkbox("启用自动刷新（每5秒）", value=False)
+        # if auto_refresh:
+        #     time.sleep(5)  # 等待5秒
+        #     st.experimental_rerun()  # 重新运行应用
     else:
         st.info("点击'刷新实时数据'按钮获取最新盘中数据")
 
@@ -1812,7 +1875,27 @@ try:
                         
                         # 显示K线图和买卖点
                         st.subheader("K线图与买卖点分析")
-                        fig_buy_sell = plot_buy_sell_points(df)
+                        # 使用包含实时数据的DataFrame绘制买卖点图表
+                        df_for_plot = df
+                        if 'realtime_data' in st.session_state:
+                            df_with_realtime = df.copy()
+                            realtime_data = st.session_state['realtime_data']
+                            # 如果有实时数据，更新最后一行的收盘价、最高价、最低价等
+                            if len(df_with_realtime) > 0:
+                                # 仅在交易时段更新
+                                is_trading_hours = True  # 可以根据需要添加具体的交易时段判断逻辑
+                                if is_trading_hours:
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Close'] = realtime_data['price']
+                                    # 更新最高价和最低价（如果实时数据更高或更低）
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'High'] = max(df_with_realtime['High'].iloc[-1], realtime_data['high'])
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Low'] = min(df_with_realtime['Low'].iloc[-1], realtime_data['low'])
+                                    # 更新成交量
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Volume'] = realtime_data['volume']
+                                    # 重新计算技术指标
+                                    df_with_realtime = calculate_indicators(df_with_realtime)
+                                    df_for_plot = df_with_realtime
+                                    
+                        fig_buy_sell = plot_buy_sell_points(df_for_plot)
                         st.plotly_chart(fig_buy_sell, use_container_width=True)
                         
                         # 如果有公司信息，显示基本面分析
@@ -1872,13 +1955,39 @@ try:
                         
                         # 显示买卖点图表
                         st.subheader("买卖点图表")
-                        fig_buy_sell = plot_buy_sell_points(df)
+                        # 使用包含实时数据的DataFrame绘制买卖点图表
+                        df_for_plot = df
+                        if 'realtime_data' in st.session_state:
+                            df_with_realtime = df.copy()
+                            realtime_data = st.session_state['realtime_data']
+                            # 如果有实时数据，更新最后一行的收盘价、最高价、最低价等
+                            if len(df_with_realtime) > 0:
+                                # 仅在交易时段更新
+                                is_trading_hours = True  # 可以根据需要添加具体的交易时段判断逻辑
+                                if is_trading_hours:
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Close'] = realtime_data['price']
+                                    # 更新最高价和最低价（如果实时数据更高或更低）
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'High'] = max(df_with_realtime['High'].iloc[-1], realtime_data['high'])
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Low'] = min(df_with_realtime['Low'].iloc[-1], realtime_data['low'])
+                                    # 更新成交量
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Volume'] = realtime_data['volume']
+                                    # 重新计算技术指标
+                                    df_with_realtime = calculate_indicators(df_with_realtime)
+                                    df_for_plot = df_with_realtime
+                                    
+                        fig_buy_sell = plot_buy_sell_points(df_for_plot)
                         st.plotly_chart(fig_buy_sell, use_container_width=True)
                     
                     with right_col:
                         # 显示当前价格和主要指标
                         st.subheader("当前行情")
-                        st.metric("当前价格", format_price(df['Close'].iloc[-1], market_type))
+                        
+                        # 使用实时数据显示当前价格（如果有）
+                        if 'realtime_data' in st.session_state:
+                            realtime_data = st.session_state['realtime_data']
+                            st.metric("当前价格", format_price(realtime_data['price'], market_type))
+                        else:
+                            st.metric("当前价格", format_price(df['Close'].iloc[-1], market_type))
                         
                         # 显示主要技术指标
                         st.subheader("主要技术指标")
@@ -1897,7 +2006,26 @@ try:
                         # 显示买卖点分析
                         st.subheader("买卖点分析")
                         company_info = get_company_info(stock_symbol) if market_type == "A股" else None
-                        signals = analyze_buy_sell_signals(df, company_info)
+                        
+                        # 将实时数据整合到DataFrame中进行分析
+                        df_with_realtime = df.copy()
+                        if 'realtime_data' in st.session_state:
+                            realtime_data = st.session_state['realtime_data']
+                            # 如果有实时数据，更新最后一行的收盘价、最高价、最低价等
+                            if len(df_with_realtime) > 0:
+                                # 仅在交易时段更新（非交易时段可能使用的是前一天的收盘价作为实时价格）
+                                is_trading_hours = True  # 可以根据需要添加具体的交易时段判断逻辑
+                                if is_trading_hours:
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Close'] = realtime_data['price']
+                                    # 更新最高价和最低价（如果实时数据更高或更低）
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'High'] = max(df_with_realtime['High'].iloc[-1], realtime_data['high'])
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Low'] = min(df_with_realtime['Low'].iloc[-1], realtime_data['low'])
+                                    # 更新成交量
+                                    df_with_realtime.loc[df_with_realtime.index[-1], 'Volume'] = realtime_data['volume']
+                                    # 重新计算技术指标
+                                    df_with_realtime = calculate_indicators(df_with_realtime)
+                                    
+                        signals = analyze_buy_sell_signals(df_with_realtime if 'realtime_data' in st.session_state else df, company_info)
                         
                         # 显示买卖点推荐
                         if signals['recommendation'] == "数据不足":
@@ -1907,6 +2035,10 @@ try:
                             st.markdown(f"<h3 style='color: {recommendation_color};'>{signals['recommendation']}</h3>", unsafe_allow_html=True)
                             st.metric("综合评分", f"{signals['score']}")
                             st.write(f"**原因:** {signals['reason']}")
+                            
+                            # 显示是否使用了实时数据
+                            if 'realtime_data' in st.session_state:
+                                st.info(f"分析使用了截至 {st.session_state['last_refresh'].strftime('%H:%M:%S')} 的实时数据")
                         
                         # 显示买入信号
                         if signals['buy_signals']:
